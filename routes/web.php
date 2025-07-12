@@ -10,9 +10,11 @@ use App\Http\Controllers\DistController;
 use App\Http\Controllers\CommonController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\PlanController;
+use App\Http\Controllers\WebController;
 
 
 use App\Http\Controllers\Auth\RegisteredUserController;
+use PhpOffice\PhpSpreadsheet\Calculation\Web;
 
 /*
 |--------------------------------------------------------------------------
@@ -29,7 +31,7 @@ Route::get('/', function () {
     return redirect(route('login'));
 });
 
-
+Route::get('/webapp',[WebController::class, 'webIndex'])->name('webapp'); 
 Route::post('/logout', function () {
     Auth::logout();
     return redirect('/login');
