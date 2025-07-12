@@ -571,7 +571,6 @@
                 </div>
             </div>
             <!-- Shayari and Festive Wishes Section -->
-            <!-- Shayari and Festive Wishes Section -->
             <div class="col-md-6">
                 <div class="category-card card border-0 shadow h-100">
                     <div class="category-header d-flex justify-content-between align-items-center bg-danger bg-opacity-10">
