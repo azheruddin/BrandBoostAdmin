@@ -31,7 +31,7 @@ Route::get('/', function () {
     return redirect(route('login'));
 });
 
-Route::get('/webapp',[WebController::class, 'webIndex'])->name('webapp'); 
+Route::get('/Web_App',[WebController::class, 'webIndex'])->name('Web_App'); 
 Route::post('/logout', function () {
     Auth::logout();
     return redirect('/login');
