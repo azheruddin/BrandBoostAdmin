@@ -28,7 +28,7 @@ use PhpOffice\PhpSpreadsheet\Calculation\Web;
 */
 
 Route::get('/', function () {
-    return redirect(route('login'));
+    return redirect(route('Web_App'));
 });
 
 Route::get('/Web_App',[WebController::class, 'webIndex'])->name('Web_App'); 
