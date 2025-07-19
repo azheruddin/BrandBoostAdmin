@@ -1257,6 +1257,7 @@ public function overlayOnPostVideo(Request $request, string $id): \Illuminate\Ht
             'updated_video_url' => $publicUrl,
         ], 200);
 
+
     } catch (\Exception $e) {
         Log::error("Overlay processing error: {$e->getMessage()}");
         return response()->json([
@@ -1265,6 +1266,180 @@ public function overlayOnPostVideo(Request $request, string $id): \Illuminate\Ht
             'error' => $e->getMessage(),
             'command' => $cmd,
         ], 500);
+
+        // Fetch post
+        $post = Post::find($id);
+        if (!$post || !in_array(strtolower($post->type), ['video', 'custom_video'])) {
+            Log::error("Invalid or missing video post: {$id}");
+            return response()->json(['status' => false, 'message' => 'Invalid or missing video post.'], 404);
+        }
+
+        // Resolve video path
+        $originalPath = public_path(str_replace(asset(''), '', $post->path_url));
+        if (!file_exists($originalPath)) {
+            Log::error("Original video file not found: {$originalPath}");
+            return response()->json(['status' => false, 'message' => 'Original video file not found.'], 404);
+        }
+
+        // Fetch profile
+        $profile = Profile::where('user_id', $userId)->first();
+        if (!$profile || !isset($profile->profile_logo)) {
+            return response()->json(['status' => false, 'message' => 'Profile or profile logo not found.'], 404);
+        }
+
+        // Resolve logo path
+        $profileLogoPath = Storage::disk('public')->path($profile->profile_logo);
+        if (!file_exists($profileLogoPath)) {
+            Log::error("Profile logo not found: {$profileLogoPath}");
+            return response()->json(['status' => false, 'message' => 'Profile logo not found.'], 404);
+        }
+
+        // Fetch video resolution
+        $ffprobePath = env('FFPROBE_PATH', '/usr/bin/ffprobe');
+        $probeCmd = "\"{$ffprobePath}\" -v error -select_streams v:0 -show_entries stream=width,height -of json {$originalPath}";
+        $probeOutput = shell_exec($probeCmd);
+        $videoInfo = json_decode($probeOutput, true);
+        $videoWidth = $videoInfo['streams'][0]['width'] ?? 1280;
+        $videoHeight = $videoInfo['streams'][0]['height'] ?? 720;
+
+        // Text styling
+        $textColor = $post->text_color ?? 'blue'; // Default to blue (#0000FF)
+        // Convert text color to hex
+        $colorMap = [
+            'white' => '#FFFFFF',
+            'black' => '#000000',
+            'red' => '#FF0000',
+            'blue' => '#0000FF',
+            'green' => '#00FF00',
+            'yellow' => '#FFFF00',
+        ];
+        $textColor = $colorMap[strtolower(trim($textColor))] ?? (preg_match('/^#[0-9A-Fa-f]{6}$/', $textColor) ? $textColor : '#0000FF');
+
+        // Background color
+        $bgColor = $post->bg_color ?? '0x00000000'; // Default to transparent
+        if ($bgColor && !preg_match('/^0x[0-9A-Fa-f]{8}$/', $bgColor)) {
+            $bgColorMap = [
+                'white' => '0xFFFFFF80',
+                'black' => '0x00000080',
+                'red' => '0xFF000080', // Semi-transparent red
+                'blue' => '0x0000FF80',
+                'green' => '0x00FF0080',
+                'yellow' => '0xFFFF0080',
+            ];
+            $bgColor = $bgColorMap[strtolower(trim($bgColor))] ?? '0x00000000';
+        }
+
+        $textSize = $post->text_size ?? 20;
+        $fontSizeMap = [1 => 18, 2 => 22, 3 => 26, 4 => 30, 5 => 34];
+        $fontSize = min($fontSizeMap[$textSize] ?? 24, floor($videoWidth * 0.02));
+
+        // FFmpeg setup
+        $ffmpegPath = env('FFMPEG_PATH', '/usr/bin/ffmpeg');
+        $fileName = uniqid('video_overlay_') . '.mp4';
+        $processedRelPath = "videos/processed/{$fileName}";
+        $processedAbsPath = public_path("uploads/{$processedRelPath}");
+
+        if (!file_exists(dirname($processedAbsPath))) {
+            mkdir(dirname($processedAbsPath), 0755, true);
+        }
+
+        // Logo position
+        $logoPosition = $post->logo_position ?? '1';
+        $logoPositions = [
+            '1' => '10:10',
+            '2' => 'main_w-overlay_w-10:10',
+            '3' => '10:main_h-overlay_h-10',
+            '4' => 'main_w-overlay_w-10:main_h-overlay_h-10',
+        ];
+        $logoOverlayPos = $logoPositions[$logoPosition] ?? $logoPositions['1'];
+
+        // Logo size
+        $logoWidth = $profile->logo_width ?? 130;
+        $logoHeight = $profile->logo_height ?? 130;
+
+        // Sanitize paths
+        $originalPath = escapeshellarg($originalPath);
+        $profileLogoPath = escapeshellarg($profileLogoPath);
+        $processedAbsPath = escapeshellarg($processedAbsPath);
+
+        // Combined text with line breaks
+        $textFields = [
+            $profile->business_name ?? '',
+            $profile->website ?? '',
+            $profile->instagram_facebook ?? '',
+            $profile->address ?? '',
+            $profile->whatsappno ?? '',
+        ];
+        $inlineText = collect($textFields)->filter()->implode(' | ');
+
+        // Split text into lines (max 50 chars per line)
+        $maxLineLength = 50;
+        $words = explode(' ', $inlineText);
+        $lines = [];
+        $currentLine = '';
+
+        foreach ($words as $word) {
+            if (strlen($currentLine . ' ' . $word) <= $maxLineLength) {
+                $currentLine .= ($currentLine ? ' ' : '') . $word;
+            } else {
+                $lines[] = $currentLine;
+                $currentLine = $word;
+            }
+        }
+        if ($currentLine) {
+            $lines[] = $currentLine;
+        }
+
+        $escapedText = $this->escapeForDrawtext(implode('\n', $lines));
+
+        // Text position
+        $textX = 20;
+        $lineCount = count($lines);
+        $textY = $position === '1' ? 50 : "main_h-".(50 + ($lineCount * ($fontSize + 10)));
+
+        // Start FFmpeg command
+        $cmd = "\"{$ffmpegPath}\" -y -i {$originalPath} -i {$profileLogoPath} ";
+
+        // Filters: overlay logo + text
+        $filterComplex = "[1:v]scale={$logoWidth}:{$logoHeight}[logo];[0:v][logo]overlay={$logoOverlayPos}";
+        $filterComplex .= ",drawtext=font='Arial':text='{$escapedText}':x={$textX}:y={$textY}:fontsize={$fontSize}:fontcolor={$textColor}:box=1:boxcolor={$bgColor}:boxborderw=5";
+
+        // Final FFmpeg command
+        $cmd .= "-filter_complex \"{$filterComplex}\" -c:v libx264 -preset fast -pix_fmt yuv420p -c:a copy {$processedAbsPath} 2>&1";
+
+        Log::debug("FFmpeg Command: {$cmd}");
+        Log::debug("Filter Complex: {$filterComplex}");
+        Log::debug("Text Color: {$textColor}, Background Color: {$bgColor}");
+
+        try {
+            exec($cmd, $output, $return);
+            if ($return !== 0) {
+                Log::error("FFmpeg failed: " . implode("\n", $output));
+                throw new \Exception("FFmpeg processing failed: " . implode("\n", $output));
+            }
+
+            $publicUrl = asset("uploads/{$processedRelPath}");
+            $post->update([
+                'path_url' => $publicUrl,
+                'overlay_text' => null,
+            ]);
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Profile logo and user info overlaid successfully.',
+                'updated_video_url' => $publicUrl,
+            ], 200);
+
+        } catch (\Exception $e) {
+            Log::error("Overlay processing error: {$e->getMessage()}");
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to process video.',
+                'error' => $e->getMessage(),
+                'command' => $cmd,
+            ], 500);
+        }
+>>>>>>> fb34d28 (remove test overlay video and modify apicontroller file for ffmpeg path)
     }
 }
 
