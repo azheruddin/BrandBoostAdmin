@@ -1,0 +1,55 @@
+# name: Deploy BrandBoostIndia to AWS VM
+
+on:
+  push:
+    branches:
+      - master  # Change to your default branch if needed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Add AWS VM to known hosts
+        run: |
+          ssh-keyscan -H 13.200.81.37 >> ~/.ssh/known_hosts
+
+      - name: Test SSH connection
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@13.200.81.37 "echo 'SSH connection successful'"
+
+      - name: Copy files to AWS VM
+        run: |
+          rsync -avz \
+            --exclude='.env' \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='vendor' \
+            ./ ubuntu@13.200.81.37:/var/www/html/brandboostadmin
+
+      - name: Install dependencies & setup app
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@13.200.81.37 << 'EOF'
+            cd /var/www/html/brandboostadmin
+            sudo chmod -R 775 storage bootstrap/cache
+            composer install --no-dev --optimize-autoloader
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+            # php artisan migrate --force  # Uncomment if needed
+          EOF
+
+      - name: Reload services
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@13.200.81.37 << 'EOF'
+            sudo systemctl reload nginx
+            sudo systemctl reload php8.1-fpm
+          EOF
