@@ -27,7 +27,6 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 Route::post('/overlay-video/{id}', [ApiController::class, 'overlayOnPostVideo']);
 
 
-
 // for post methd get-api
 Route::post('/insert-category',[ApiController::class,'insertCategory']);
 Route::get('/categories', [ApiController::class, 'getAllCategory']);
